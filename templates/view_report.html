@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="text-center my-4">Sample Report</h1>
+<div class="card">
+    <div class="card-header bg-primary text-white">File Details</div>
+    <div class="card-body">
+        <p><strong>Filename:</strong> {{ sample.filename }}</p>
+        <p><strong>Filehash:</strong> {{ sample.filehash }}</p>
+        <p><strong>Static Analysis:</strong> {{ sample.static_analysis }}</p>
+        <p><strong>Dynamic Analysis:</strong> {{ sample.dynamic_analysis }}</p>
+    </div>
+    <div class="card-footer">
+        <a class="btn btn-warning" href="{{ url_for('edit_rule', sample_id=sample.id) }}">Edit YARA Rule</a>
+    </div>
+</div>
+<h2 class="text-center my-4">Generated YARA Rule</h2>
+<pre class="bg-light p-3">{{ sample.yara_rule }}</pre>
+{% endblock %}

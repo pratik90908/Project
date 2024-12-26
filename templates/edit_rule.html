@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="text-center my-4">Edit YARA Rule</h1>
+<div class="card">
+    <div class="card-body">
+        <form method="post">
+            <div class="mb-3">
+                <textarea name="yara_rule" class="form-control" rows="10">{{ sample.yara_rule }}</textarea>
+            </div>
+            <button class="btn btn-success" type="submit">Save Rule</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
