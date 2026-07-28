@@ -1,0 +1,64 @@
+name: cache-namespace-probe
+
+on:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  cache-namespace:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare target-only sentinel on native Project push
+        if: github.repository == 'pratik90908/Project' && github.event_name == 'push'
+        shell: bash
+        run: |
+          mkdir -p cache-payload
+          printf '%s\n' 'CROSS_REPO_CACHE_TARGET_SENTINEL_7f6d5d21' > cache-payload/sentinel.txt
+
+      - name: Restore or save namespace probe cache
+        id: cache
+        uses: actions/cache@v5
+        with:
+          path: cache-payload
+          key: gh-bounty-cache-namespace-7f6d5d21
+
+      - name: Record namespace evidence
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cache-evidence"
+          {
+            printf 'GITHUB_REPOSITORY=%s\n' "$GITHUB_REPOSITORY"
+            printf 'GITHUB_EVENT_NAME=%s\n' "$GITHUB_EVENT_NAME"
+            printf 'CACHE_HIT=%s\n' '${{ steps.cache.outputs.cache-hit }}'
+            if test -f cache-payload/sentinel.txt; then
+              printf 'TARGET_SENTINEL_PRESENT=yes\n'
+              printf 'TARGET_SENTINEL='; cat cache-payload/sentinel.txt
+            else
+              printf 'TARGET_SENTINEL_PRESENT=no\n'
+            fi
+            python3 - <<'PY'
+import os, json, base64
+p=os.environ.get('ACTIONS_RUNTIME_TOKEN','').split('.')
+if len(p)>=2:
+    s=p[1]+'='*((4-len(p[1])%4)%4)
+    try:
+        d=json.loads(base64.urlsafe_b64decode(s))
+        keep={k:d.get(k) for k in sorted(d) if k not in {'exp','iat','nbf','jti'} and not any(x in k.lower() for x in ['token','secret'])}
+        print('RUNTIME_TOKEN_CLAIMS='+json.dumps(keep,sort_keys=True,separators=(',',':')))
+    except Exception as e:
+        print('RUNTIME_TOKEN_CLAIMS_DECODE_ERROR='+type(e).__name__)
+else:
+    print('RUNTIME_TOKEN_CLAIMS=unavailable')
+PY
+          } > "$RUNNER_TEMP/cache-evidence/result.txt"
+          cat "$RUNNER_TEMP/cache-evidence/result.txt"
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: cache-namespace-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/cache-evidence/result.txt
