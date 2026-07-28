@@ -1,0 +1,96 @@
+name: checkout-v7-deleted-fork-guard-poc
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch released actions/checkout v7.0.1 source
+        uses: actions/checkout@v7
+        with:
+          repository: actions/checkout
+          ref: v7.0.1
+          path: checkout-v7
+          persist-credentials: false
+
+      - name: Execute released checkout bundle against real deleted-fork metadata
+        shell: bash
+        env:
+          PROJECT_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          mkdir -p "$RUNNER_TEMP/fake-workspace" "$RUNNER_TEMP/evidence"
+          cat > "$RUNNER_TEMP/deleted-fork-event.json" <<'JSON'
+          {
+            "repository": {
+              "id": 386524895,
+              "name": "mvt",
+              "full_name": "mvt-project/mvt",
+              "owner": {"login": "mvt-project"},
+              "private": false,
+              "default_branch": "main"
+            },
+            "pull_request": {
+              "number": 812,
+              "head": {
+                "sha": "c2f2ac2d9b4760a650c5a62434d6f57965944a5c",
+                "ref": "fix/receiver-prefix-false-positive",
+                "repo": null
+              },
+              "base": {
+                "sha": "d590706e6222bcb401ccd7aa653f51b3ce7f1006",
+                "ref": "main",
+                "repo": {"id": 386524895, "full_name": "mvt-project/mvt"}
+              },
+              "merge_commit_sha": "ba63efab0b4d9c61258c6c69db09f7c1983e71f5"
+            }
+          }
+          JSON
+
+          OUT="$RUNNER_TEMP/evidence/result.txt"
+          : > "$OUT"
+          set +e
+          env \
+            GITHUB_EVENT_NAME='pull_request_target' \
+            GITHUB_EVENT_PATH="$RUNNER_TEMP/deleted-fork-event.json" \
+            GITHUB_REPOSITORY='mvt-project/mvt' \
+            GITHUB_REPOSITORY_OWNER='mvt-project' \
+            GITHUB_WORKSPACE="$RUNNER_TEMP/fake-workspace" \
+            'INPUT_REPOSITORY=mvt-project/mvt' \
+            'INPUT_REF=c2f2ac2d9b4760a650c5a62434d6f57965944a5c' \
+            'INPUT_PATH=deleted-fork-head' \
+            'INPUT_FETCH-DEPTH=1' \
+            'INPUT_PERSIST-CREDENTIALS=false' \
+            "INPUT_TOKEN=$PROJECT_TOKEN" \
+            node checkout-v7/dist/index.js > "$RUNNER_TEMP/checkout.log" 2>&1
+          rc=$?
+          set -e
+
+          printf 'ACTION_EXIT=%s\n' "$rc" >> "$OUT"
+          if grep -q 'Refusing to check out fork pull request code' "$RUNNER_TEMP/checkout.log"; then
+            printf 'GUARD_REFUSED=yes\n' >> "$OUT"
+          else
+            printf 'GUARD_REFUSED=no\n' >> "$OUT"
+          fi
+          if test -d "$RUNNER_TEMP/fake-workspace/deleted-fork-head/.git"; then
+            printf 'CHECKOUT_CREATED=yes\n' >> "$OUT"
+            got=$(git -C "$RUNNER_TEMP/fake-workspace/deleted-fork-head" rev-parse HEAD 2>/dev/null || true)
+            printf 'CHECKED_OUT_SHA=%s\n' "$got" >> "$OUT"
+          else
+            printf 'CHECKOUT_CREATED=no\n' >> "$OUT"
+          fi
+          printf '%s\n' '--- relevant log tail ---' >> "$OUT"
+          tail -n 40 "$RUNNER_TEMP/checkout.log" >> "$OUT"
+          cat "$OUT"
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: checkout-v7-deleted-fork-guard-evidence
+          path: ${{ runner.temp }}/evidence/result.txt
