@@ -1,0 +1,36 @@
+name: oidc-reusable-probe
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  oidc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request and decode OIDC token claims
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/oidc-evidence"
+          response=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https%3A%2F%2Fgithub-bounty.invalid")
+          token=$(printf '%s' "$response" | jq -r '.value')
+          TOKEN="$token" python3 - <<'PY' > "$RUNNER_TEMP/oidc-evidence/claims.json"
+import os,json,base64
+p=os.environ['TOKEN'].split('.')[1]
+p += '='*((4-len(p)%4)%4)
+d=json.loads(base64.urlsafe_b64decode(p))
+keep={k:v for k,v in d.items() if k not in {'exp','iat','nbf','jti'} }
+print(json.dumps(keep,sort_keys=True,indent=2))
+PY
+          cat "$RUNNER_TEMP/oidc-evidence/claims.json"
+
+      - name: Upload OIDC evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: oidc-reusable-evidence
+          path: ${{ runner.temp }}/oidc-evidence/claims.json
