@@ -1,11 +1,13 @@
-run_id=30434045203
+run_id=30434122185
 pages_upload=success
 download=success
+checkout_extraheader_before=true
 tar_present=true
 outside_entry=1
 git_config_entry=1
 outside_content_included=true
 git_exclusion_bypassed=true
+checkout_auth_config_archived=true
 tar_entries_begin
 ./
 ./git-config-link.txt
