@@ -1,0 +1,9 @@
+source_revision=cf74f6f9338ce8eb899ce8e472eaed6a19238a5b
+updater_network_internal=true
+proxy_dual_homed=true
+direct_internal_gateway_exit=0
+direct_internal_gateway_reached_host=true
+direct_external_gateway_exit=7
+direct_external_gateway_reached_host=false
+proxy_external_gateway_exit=0
+proxy_external_gateway_reached_host=true
