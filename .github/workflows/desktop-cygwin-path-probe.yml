@@ -30,11 +30,11 @@ jobs:
           mkdir -p "$repo_path"
           marker="$repo_path/marker"
 
-          # Desktop Cygwin launcher constructs shell source by interpolating the
-          # repository path into: cd "$(cygpath "<path>")"; exec bash
-          # Build equivalent source text, then parse it in a fresh bash process.
+          # Desktop's Cygwin launcher uses shell:true and cwd:path while embedding
+          # the repository path in shell source:
+          #   /bin/sh -lc 'cd "$(cygpath "<path>")"; exec bash'
           script=$(printf 'cd "$(cygpath "%s")"; true' "$repo_path")
-          bash -lc "$script" || true
+          (cd "$repo_path" && bash -lc "$script") || true
 
           mkdir -p security-probe-results
           if [[ -e "$marker" ]]; then
