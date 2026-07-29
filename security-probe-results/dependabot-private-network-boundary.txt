@@ -1,0 +1,8 @@
+source_revision=cf74f6f9338ce8eb899ce8e472eaed6a19238a5b
+updater_network_internal=true
+proxy_dual_homed=true
+destination_class=docker_external_bridge_gateway_runner_host
+updater_proxy_request_exit=0
+runner_host_private_service_reached=true
+direct_internal_only_request_exit=7
+direct_internal_only_reached_host=false
