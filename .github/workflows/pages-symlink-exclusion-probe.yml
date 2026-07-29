@@ -24,6 +24,11 @@ jobs:
           mkdir -p _site
           printf 'OUTSIDE_ROOT_MARKER_%s\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/outside-pages-marker.txt"
           git config --local probe.pagesMarker "GIT_CONFIG_MARKER_$GITHUB_RUN_ID"
+          if git config --local --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1; then
+            echo true > "$RUNNER_TEMP/checkout-extraheader-before"
+          else
+            echo false > "$RUNNER_TEMP/checkout-extraheader-before"
+          fi
           ln -s "$RUNNER_TEMP/outside-pages-marker.txt" _site/outside-link.txt
           ln -s "$GITHUB_WORKSPACE/.git/config" _site/git-config-link.txt
           printf 'normal site file\n' > _site/index.html
@@ -58,6 +63,7 @@ jobs:
           echo "run_id=$GITHUB_RUN_ID" >> "$RESULT"
           echo "pages_upload=$PAGES_OUTCOME" >> "$RESULT"
           echo "download=$DOWNLOAD_OUTCOME" >> "$RESULT"
+          echo "checkout_extraheader_before=$(cat "$RUNNER_TEMP/checkout-extraheader-before" 2>/dev/null || echo unknown)" >> "$RESULT"
           TAR="$RUNNER_TEMP/pages-downloaded/artifact.tar"
           if [[ -f "$TAR" ]]; then
             echo "tar_present=true" >> "$RESULT"
@@ -75,6 +81,12 @@ jobs:
             else
               echo "git_exclusion_bypassed=false" >> "$RESULT"
             fi
+            EXTRACTED="$RUNNER_TEMP/pages-extracted/git-config-link.txt"
+            if [[ -f "$EXTRACTED" ]] && grep -Eq 'extraheader|AUTHORIZATION' "$EXTRACTED"; then
+              echo "checkout_auth_config_archived=true" >> "$RESULT"
+            else
+              echo "checkout_auth_config_archived=false" >> "$RESULT"
+            fi
             echo "tar_entries_begin" >> "$RESULT"
             sed -n '1,80p' "$RUNNER_TEMP/tar-list.txt" >> "$RESULT"
             echo "tar_entries_end" >> "$RESULT"
@@ -90,5 +102,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add security-probe-results/pages-symlink-exclusion.txt
-          git commit -m 'Record Pages symlink exclusion probe verdict' || exit 0
+          git commit -m 'Record Pages symlink credential probe verdict' || exit 0
           git push
