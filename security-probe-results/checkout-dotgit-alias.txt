@@ -1,0 +1,31 @@
+action_exit=0
+event=pull_request_target
+payload_head_repo=pratik90908/Project
+input_repository=pratik90908/Project.git
+input_ref=checkout-dotgit-payload
+marker_checked_out=true
+checked_out_head=9624afebfb3dd33f50badbbd8f11750439b0a989
+origin=https://github.com/pratik90908/Project.git
+guard_refused=false
+log_tail_begin
+::debug::0
+::debug::/github/runner_temp/git-credentials-be5ed7aa-c1dd-41b5-9e72-87b0a4cc59c5.config%0A
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-be5ed7aa\-c1dd\-41b5\-9e72\-87b0a4cc59c5\.config
+::debug::0
+::debug::
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+/github/runner_temp/git-credentials-be5ed7aa-c1dd-41b5-9e72-87b0a4cc59c5.config
+::debug::0
+::debug::/github/runner_temp/git-credentials-be5ed7aa-c1dd-41b5-9e72-87b0a4cc59c5.config%0A
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-be5ed7aa\-c1dd\-41b5\-9e72\-87b0a4cc59c5\.config
+::debug::0
+::debug::
+[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+::debug::0
+::debug::
+Removing credentials config '/home/runner/work/_temp/git-credentials-be5ed7aa-c1dd-41b5-9e72-87b0a4cc59c5.config'
+::debug::Skipping removal of credentials config '/github/runner_temp/git-credentials-be5ed7aa-c1dd-41b5-9e72-87b0a4cc59c5.config' - not under RUNNER_TEMP
+::endgroup::
+::debug::Unsetting HOME override
+::remove-matcher owner=checkout-git::
+log_tail_end
