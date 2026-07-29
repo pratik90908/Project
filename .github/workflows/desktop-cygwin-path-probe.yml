@@ -1,0 +1,38 @@
+name: desktop-cygwin-path-probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reproduce Desktop Cygwin shell construction safely
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repoName = "Project-evil`$(touch`$IFS'marker')"
+          $root = Join-Path $env:RUNNER_TEMP 'desktop-cygwin-probe'
+          $repoPath = Join-Path $root $repoName
+          New-Item -ItemType Directory -Force -Path $repoPath | Out-Null
+          $marker = Join-Path $repoPath 'marker'
+          $bash = (Get-Command bash.exe).Source
+          $unixish = $repoPath -replace '\\','/'
+          $script = "cygpath(){ printf '%s\\n' \"`$1\"; }; cd \"`$(cygpath \"$unixish\")\"; true"
+          & $bash -lc $script
+          $created = Test-Path $marker
+          New-Item -ItemType Directory -Force security-probe-results | Out-Null
+          "marker_created=$($created.ToString().ToLower())" | Set-Content security-probe-results/desktop-cygwin-path.txt
+          "payload_branch=evil`$(touch`$IFS'marker')" | Add-Content security-probe-results/desktop-cygwin-path.txt
+      - name: Commit verdict
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/desktop-cygwin-path.txt
+          git commit -m 'Record Desktop Cygwin path injection probe' || exit 0
+          git push
