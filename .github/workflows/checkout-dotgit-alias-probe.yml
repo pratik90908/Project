@@ -27,8 +27,7 @@ jobs:
         with:
           path: verdict-repo
 
-      - name: Run compiled action under synthetic fork PR event
-        id: synthetic
+      - name: Differential alias validation
         shell: bash
         env:
           TOKEN: ${{ github.token }}
@@ -36,74 +35,86 @@ jobs:
         run: |
           set -u
           SRC="$GITHUB_WORKSPACE/checkout-action-src"
-          SYNTH="$GITHUB_WORKSPACE/synthetic-workspace"
-          EVENT="$RUNNER_TEMP/synthetic-pull-request-target.json"
-          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/checkout-dotgit-alias.txt"
-          rm -rf "$SYNTH"
-          mkdir -p "$SYNTH" "$(dirname "$RESULT")"
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/checkout-dotgit-alias-matrix.txt"
+          mkdir -p "$(dirname "$RESULT")"
+          : > "$RESULT"
 
-          cat > "$EVENT" <<EOF
+          run_case() {
+            label="$1"
+            event_name="$2"
+            input_repo="$3"
+            workspace="$GITHUB_WORKSPACE/case-$label"
+            event="$RUNNER_TEMP/event-$label.json"
+            log="$RUNNER_TEMP/log-$label.txt"
+            rm -rf "$workspace"
+            mkdir -p "$workspace"
+
+            if [[ "$event_name" == "pull_request_target" ]]; then
+              cat > "$event" <<EOF
           {
-            "repository": {
-              "id": 424242424,
-              "full_name": "pratik90908/synthetic-base"
-            },
+            "repository": {"id": 424242424, "full_name": "pratik90908/synthetic-base"},
             "pull_request": {
               "head": {
-                "repo": {
-                  "id": 900807132,
-                  "full_name": "pratik90908/Project"
-                },
+                "repo": {"id": 900807132, "full_name": "pratik90908/Project"},
                 "sha": "$PAYLOAD_SHA"
               },
               "merge_commit_sha": "1111111111111111111111111111111111111111"
             }
           }
           EOF
+            else
+              cat > "$event" <<EOF
+          {
+            "repository": {"id": 424242424, "full_name": "pratik90908/synthetic-base"},
+            "workflow_run": {
+              "event": "pull_request",
+              "head_repository": {"id": 900807132, "full_name": "pratik90908/Project"},
+              "head_commit": {"id": "$PAYLOAD_SHA"},
+              "head_sha": "$PAYLOAD_SHA"
+            }
+          }
+          EOF
+            fi
 
-          set +e
-          env \
-            GITHUB_EVENT_NAME=pull_request_target \
-            GITHUB_EVENT_PATH="$EVENT" \
-            GITHUB_REPOSITORY=pratik90908/synthetic-base \
-            GITHUB_WORKSPACE="$SYNTH" \
-            INPUT_REPOSITORY=pratik90908/Project.git \
-            INPUT_REF=checkout-dotgit-payload \
-            INPUT_TOKEN="$TOKEN" \
-            node "$SRC/dist/index.js" > "$RUNNER_TEMP/dotgit-action.log" 2>&1
-          ACTION_EXIT=$?
-          set -e
+            set +e
+            env \
+              GITHUB_EVENT_NAME="$event_name" \
+              GITHUB_EVENT_PATH="$event" \
+              GITHUB_REPOSITORY=pratik90908/synthetic-base \
+              GITHUB_WORKSPACE="$workspace" \
+              INPUT_REPOSITORY="$input_repo" \
+              INPUT_REF=checkout-dotgit-payload \
+              INPUT_TOKEN="$TOKEN" \
+              node "$SRC/dist/index.js" > "$log" 2>&1
+            exit_code=$?
+            set -e
 
-          : > "$RESULT"
-          echo "action_exit=$ACTION_EXIT" >> "$RESULT"
-          echo "event=pull_request_target" >> "$RESULT"
-          echo "payload_head_repo=pratik90908/Project" >> "$RESULT"
-          echo "input_repository=pratik90908/Project.git" >> "$RESULT"
-          echo "input_ref=checkout-dotgit-payload" >> "$RESULT"
+            echo "${label}.event=$event_name" >> "$RESULT"
+            echo "${label}.input_repository=$input_repo" >> "$RESULT"
+            echo "${label}.exit=$exit_code" >> "$RESULT"
+            if grep -q 'Refusing to check out fork pull request code' "$log"; then
+              echo "${label}.guard_refused=true" >> "$RESULT"
+            else
+              echo "${label}.guard_refused=false" >> "$RESULT"
+            fi
+            if [[ -f "$workspace/checkout-dotgit-marker.txt" ]] && grep -q 'CHECKOUT_DOTGIT_ALIAS_MARKER' "$workspace/checkout-dotgit-marker.txt"; then
+              echo "${label}.marker=true" >> "$RESULT"
+            else
+              echo "${label}.marker=false" >> "$RESULT"
+            fi
+            if git -C "$workspace" rev-parse HEAD >/dev/null 2>&1; then
+              echo "${label}.head=$(git -C "$workspace" rev-parse HEAD)" >> "$RESULT"
+              echo "${label}.origin=$(git -C "$workspace" remote get-url origin 2>/dev/null || true)" >> "$RESULT"
+            else
+              echo "${label}.head=" >> "$RESULT"
+              echo "${label}.origin=" >> "$RESULT"
+            fi
+          }
 
-          if [[ -f "$SYNTH/checkout-dotgit-marker.txt" ]] && grep -q 'CHECKOUT_DOTGIT_ALIAS_MARKER' "$SYNTH/checkout-dotgit-marker.txt"; then
-            echo 'marker_checked_out=true' >> "$RESULT"
-          else
-            echo 'marker_checked_out=false' >> "$RESULT"
-          fi
-
-          if git -C "$SYNTH" rev-parse HEAD >/dev/null 2>&1; then
-            echo "checked_out_head=$(git -C "$SYNTH" rev-parse HEAD)" >> "$RESULT"
-            echo "origin=$(git -C "$SYNTH" remote get-url origin 2>/dev/null || true)" >> "$RESULT"
-          else
-            echo 'checked_out_head=' >> "$RESULT"
-            echo 'origin=' >> "$RESULT"
-          fi
-
-          if grep -q 'Refusing to check out fork pull request code' "$RUNNER_TEMP/dotgit-action.log"; then
-            echo 'guard_refused=true' >> "$RESULT"
-          else
-            echo 'guard_refused=false' >> "$RESULT"
-          fi
-
-          echo 'log_tail_begin' >> "$RESULT"
-          tail -n 20 "$RUNNER_TEMP/dotgit-action.log" | sed -E 's/(token|password|authorization)[^ ]*/[redacted]/Ig' >> "$RESULT" || true
-          echo 'log_tail_end' >> "$RESULT"
+          run_case pr_target_control pull_request_target pratik90908/Project
+          run_case pr_target_dotgit pull_request_target pratik90908/Project.git
+          run_case workflow_run_control workflow_run pratik90908/Project
+          run_case workflow_run_dotgit workflow_run pratik90908/Project.git
 
       - name: Commit verdict
         if: always()
@@ -113,6 +124,6 @@ jobs:
           cd verdict-repo
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add security-probe-results/checkout-dotgit-alias.txt
-          git commit -m 'Record checkout dotgit alias bypass probe' || exit 0
+          git add security-probe-results/checkout-dotgit-alias-matrix.txt
+          git commit -m 'Record checkout dotgit alias differential matrix' || exit 0
           git push
