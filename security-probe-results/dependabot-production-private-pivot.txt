@@ -1,0 +1,8 @@
+proxy_image=ghcr.io/dependabot/proxy:v2.0.20260616220547@sha256:b3c9cac5831fdef22330282f54c7067d4df9844385daf8f1a66c880a670a9daa
+updater_image=ghcr.io/dependabot/dependabot-updater-npm:v2.0.20260618134322@sha256:202d8cf76d983932160073ccbecc20d548b3ecba73d2f63547d1873a1166f8ce
+private_service_network=external_only
+updater_network=internal_only
+direct_private_service_exit=7
+direct_private_service_reached=false
+proxy_private_service_exit=0
+proxy_private_service_reached=true
