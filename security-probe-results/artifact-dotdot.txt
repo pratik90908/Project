@@ -1,0 +1,11 @@
+run_id=30433855195
+dotdot_upload=failure
+dummy_upload=success
+download=success
+parent_marker=false
+child_tree_begin
+/home/runner/work/_temp/artifact-root/child/dummy.txt
+child_tree_end
+root_tree_begin
+/home/runner/work/_temp/artifact-root/child/dummy.txt
+root_tree_end
