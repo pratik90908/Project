@@ -1,6 +1,10 @@
 name: desktop-cygwin-path-probe
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/desktop-cygwin-path-probe.yml'
   workflow_dispatch:
 
 permissions:
