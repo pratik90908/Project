@@ -27,15 +27,16 @@ jobs:
         with:
           path: verdict-repo
 
-      - name: Differential alias validation
+      - name: Differential alias and execution validation
         shell: bash
         env:
           TOKEN: ${{ github.token }}
-          PAYLOAD_SHA: 9624afebfb3dd33f50badbbd8f11750439b0a989
+          PAYLOAD_SHA: 2f398b6f1fdb5d2da5417da5f0ccdd254e33e459
+          FAKE_PRIVILEGED_SECRET: DOTGIT_PRIVILEGED_SENTINEL
         run: |
           set -u
           SRC="$GITHUB_WORKSPACE/checkout-action-src"
-          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/checkout-dotgit-alias-matrix.txt"
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/checkout-dotgit-alias-chain.txt"
           mkdir -p "$(dirname "$RESULT")"
           : > "$RESULT"
 
@@ -46,7 +47,8 @@ jobs:
             workspace="$GITHUB_WORKSPACE/case-$label"
             event="$RUNNER_TEMP/event-$label.json"
             log="$RUNNER_TEMP/log-$label.txt"
-            rm -rf "$workspace"
+            exec_result="$RUNNER_TEMP/exec-$label.txt"
+            rm -rf "$workspace" "$exec_result"
             mkdir -p "$workspace"
 
             if [[ "$event_name" == "pull_request_target" ]]; then
@@ -89,6 +91,10 @@ jobs:
             exit_code=$?
             set -e
 
+            if [[ $exit_code -eq 0 && -f "$workspace/ci/checkout-dotgit-poc.sh" ]]; then
+              FAKE_PRIVILEGED_SECRET="$FAKE_PRIVILEGED_SECRET" bash "$workspace/ci/checkout-dotgit-poc.sh" "$exec_result"
+            fi
+
             echo "${label}.event=$event_name" >> "$RESULT"
             echo "${label}.input_repository=$input_repo" >> "$RESULT"
             echo "${label}.exit=$exit_code" >> "$RESULT"
@@ -101,6 +107,13 @@ jobs:
               echo "${label}.marker=true" >> "$RESULT"
             else
               echo "${label}.marker=false" >> "$RESULT"
+            fi
+            if [[ -f "$exec_result" ]] && grep -q '^privileged_sentinel_observed=true$' "$exec_result"; then
+              echo "${label}.attacker_code_executed=true" >> "$RESULT"
+              echo "${label}.privileged_sentinel_observed=true" >> "$RESULT"
+            else
+              echo "${label}.attacker_code_executed=false" >> "$RESULT"
+              echo "${label}.privileged_sentinel_observed=false" >> "$RESULT"
             fi
             if git -C "$workspace" rev-parse HEAD >/dev/null 2>&1; then
               echo "${label}.head=$(git -C "$workspace" rev-parse HEAD)" >> "$RESULT"
@@ -124,6 +137,6 @@ jobs:
           cd verdict-repo
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add security-probe-results/checkout-dotgit-alias-matrix.txt
-          git commit -m 'Record checkout dotgit alias differential matrix' || exit 0
+          git add security-probe-results/checkout-dotgit-alias-chain.txt
+          git commit -m 'Record checkout dotgit alias privileged execution chain' || exit 0
           git push
