@@ -1,0 +1,94 @@
+name: pages-symlink-exclusion-probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/pages-symlink-exclusion-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare harmless symlink probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          printf 'OUTSIDE_ROOT_MARKER_%s\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/outside-pages-marker.txt"
+          git config --local probe.pagesMarker "GIT_CONFIG_MARKER_$GITHUB_RUN_ID"
+          ln -s "$RUNNER_TEMP/outside-pages-marker.txt" _site/outside-link.txt
+          ln -s "$GITHUB_WORKSPACE/.git/config" _site/git-config-link.txt
+          printf 'normal site file\n' > _site/index.html
+
+      - name: Upload Pages artifact
+        id: pages
+        continue-on-error: true
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Download produced artifact
+        id: download
+        if: steps.pages.outcome == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v5
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/pages-downloaded
+
+      - name: Inspect archive safely
+        if: always()
+        shell: bash
+        env:
+          PAGES_OUTCOME: ${{ steps.pages.outcome }}
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+        run: |
+          set -u
+          mkdir -p security-probe-results "$RUNNER_TEMP/pages-extracted"
+          RESULT=security-probe-results/pages-symlink-exclusion.txt
+          : > "$RESULT"
+          echo "run_id=$GITHUB_RUN_ID" >> "$RESULT"
+          echo "pages_upload=$PAGES_OUTCOME" >> "$RESULT"
+          echo "download=$DOWNLOAD_OUTCOME" >> "$RESULT"
+          TAR="$RUNNER_TEMP/pages-downloaded/artifact.tar"
+          if [[ -f "$TAR" ]]; then
+            echo "tar_present=true" >> "$RESULT"
+            tar -tf "$TAR" > "$RUNNER_TEMP/tar-list.txt" 2>/dev/null || true
+            echo "outside_entry=$(grep -cE '(^|/)outside-link\.txt$' "$RUNNER_TEMP/tar-list.txt" || true)" >> "$RESULT"
+            echo "git_config_entry=$(grep -cE '(^|/)git-config-link\.txt$' "$RUNNER_TEMP/tar-list.txt" || true)" >> "$RESULT"
+            tar -xf "$TAR" -C "$RUNNER_TEMP/pages-extracted" 2>/dev/null || true
+            if grep -Rqs "OUTSIDE_ROOT_MARKER_$GITHUB_RUN_ID" "$RUNNER_TEMP/pages-extracted"; then
+              echo "outside_content_included=true" >> "$RESULT"
+            else
+              echo "outside_content_included=false" >> "$RESULT"
+            fi
+            if grep -Rqs "GIT_CONFIG_MARKER_$GITHUB_RUN_ID" "$RUNNER_TEMP/pages-extracted"; then
+              echo "git_exclusion_bypassed=true" >> "$RESULT"
+            else
+              echo "git_exclusion_bypassed=false" >> "$RESULT"
+            fi
+            echo "tar_entries_begin" >> "$RESULT"
+            sed -n '1,80p' "$RUNNER_TEMP/tar-list.txt" >> "$RESULT"
+            echo "tar_entries_end" >> "$RESULT"
+          else
+            echo "tar_present=false" >> "$RESULT"
+          fi
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/pages-symlink-exclusion.txt
+          git commit -m 'Record Pages symlink exclusion probe verdict' || exit 0
+          git push
