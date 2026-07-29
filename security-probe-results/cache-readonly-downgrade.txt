@@ -1,0 +1,16 @@
+event=pull_request_target
+github_ref=refs/heads/main
+cache_mode=<unset>
+cache_service_v2_present=false
+cache_url_present=false
+results_url_present=false
+forced_v2.exit=0
+forced_v2.write_denied=false
+forced_v2.client_reported_saved=false
+forced_v2.cache_count=0
+forced_v2.cache_ref=
+forced_v1.exit=0
+forced_v1.write_denied=false
+forced_v1.client_reported_saved=false
+forced_v1.cache_count=0
+forced_v1.cache_ref=
