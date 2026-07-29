@@ -1,0 +1,83 @@
+name: dependabot-host-listener-reachability
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dependabot-host-listener-reachability.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v7
+        with:
+          path: verdict-repo
+
+      - name: Measure stock runner listeners from internal-only container
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/dependabot-stock-host-listeners.txt"
+          mkdir -p "$(dirname "$RESULT")"
+          : > "$RESULT"
+
+          # Capture only TCP ports already listening on non-loopback wildcard addresses.
+          mapfile -t PORTS < <(ss -ltnH | awk '{print $4}' | python3 -c '
+          import sys
+          ports=set()
+          for raw in sys.stdin:
+              a=raw.strip()
+              if not a: continue
+              host, sep, port = a.rpartition(":")
+              host=host.strip("[]")
+              if port.isdigit() and host in ("0.0.0.0", "*", "::"):
+                  ports.add(int(port))
+          for p in sorted(ports): print(p)
+          ')
+
+          docker network create --internal db-stock-internal >/dev/null
+          GW=$(docker network inspect db-stock-internal -f '{{(index .IPAM.Config 0).Gateway}}')
+
+          echo 'network_internal=true' >> "$RESULT"
+          echo "preexisting_nonloopback_listener_count=${#PORTS[@]}" >> "$RESULT"
+
+          reachable=0
+          tested=0
+          for port in "${PORTS[@]:0:20}"; do
+            tested=$((tested+1))
+            set +e
+            docker run --rm --network db-stock-internal python:3.13-alpine \
+              python -c 'import socket,sys; s=socket.socket(); s.settimeout(1); s.connect((sys.argv[1],int(sys.argv[2]))); s.close()' \
+              "$GW" "$port" >/dev/null 2>&1
+            ec=$?
+            set -e
+            if [[ $ec -eq 0 ]]; then
+              reachable=$((reachable+1))
+            fi
+          done
+
+          echo "preexisting_ports_tested=$tested" >> "$RESULT"
+          echo "preexisting_ports_reachable_from_internal_container=$reachable" >> "$RESULT"
+          if [[ $reachable -gt 0 ]]; then
+            echo 'stock_runner_private_service_reachability=true' >> "$RESULT"
+          else
+            echo 'stock_runner_private_service_reachability=false' >> "$RESULT"
+          fi
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verdict-repo
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/dependabot-stock-host-listeners.txt
+          git commit -m 'Record stock runner host listener reachability' || exit 0
+          git push
