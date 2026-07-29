@@ -1,3 +1,3 @@
-marker_created=false
+marker_created=true
 payload_branch=evil$(touch${IFS}marker)
 generated_script=cd "$(cygpath "D:\a\_temp/desktop-cygwin-probe/Project-evil$(touch${IFS}marker)")"; true
