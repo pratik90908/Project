@@ -1,0 +1,14 @@
+run_id=30434045203
+pages_upload=success
+download=success
+tar_present=true
+outside_entry=1
+git_config_entry=1
+outside_content_included=true
+git_exclusion_bypassed=true
+tar_entries_begin
+./
+./git-config-link.txt
+./outside-link.txt
+./index.html
+tar_entries_end
