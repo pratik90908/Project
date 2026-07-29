@@ -1,6 +1,8 @@
 name: artifact-dotdot-runtime
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths:
