@@ -1,0 +1,64 @@
+name: dependabot-production-updater-ssh-banner
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dependabot-production-updater-ssh-banner.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v7
+        with:
+          path: verdict-repo
+
+      - name: Read only stock runner SSH identification banner from production updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          UPDATER_IMAGE='ghcr.io/dependabot/dependabot-updater-npm:v2.0.20260618134322@sha256:202d8cf76d983932160073ccbecc20d548b3ecba73d2f63547d1873a1166f8ce'
+          docker pull "$UPDATER_IMAGE" >/dev/null
+          docker network create --internal db-banner-internal >/dev/null
+          GW=$(docker network inspect db-banner-internal -f '{{(index .IPAM.Config 0).Gateway}}')
+
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/dependabot-production-updater-ssh-banner.txt"
+          mkdir -p "$(dirname "$RESULT")"
+          : > "$RESULT"
+          echo "updater_image=$UPDATER_IMAGE" >> "$RESULT"
+          echo 'updater_user=dependabot' >> "$RESULT"
+          echo 'updater_network_internal=true' >> "$RESULT"
+
+          set +e
+          BANNER=$(docker run --rm --user dependabot --network db-banner-internal \
+            -e HOST_GW="$GW" --entrypoint /bin/sh "$UPDATER_IMAGE" -lc '
+              ruby -rsocket -e '\''s=TCPSocket.new(ENV.fetch("HOST_GW"),22); s.readpartial(256).lines.first.then{|x| print x}; s.close'\''
+            ' 2>/dev/null)
+          EC=$?
+          set -e
+
+          echo "ssh_banner_read_exit=$EC" >> "$RESULT"
+          if [[ "$BANNER" == SSH-* ]]; then
+            echo 'ssh_banner_received=true' >> "$RESULT"
+            printf 'ssh_banner=%s\n' "$(printf '%s' "$BANNER" | tr -cd '[:alnum:]._+ -' | cut -c1-120)" >> "$RESULT"
+          else
+            echo 'ssh_banner_received=false' >> "$RESULT"
+          fi
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verdict-repo
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/dependabot-production-updater-ssh-banner.txt
+          git commit -m 'Record production updater stock host SSH reachability' || exit 0
+          git push
