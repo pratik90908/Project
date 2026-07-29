@@ -1,0 +1,6 @@
+updater_image=ghcr.io/dependabot/dependabot-updater-npm:v2.0.20260618134322@sha256:202d8cf76d983932160073ccbecc20d548b3ecba73d2f63547d1873a1166f8ce
+updater_user=dependabot
+updater_network_internal=true
+ssh_banner_read_exit=0
+ssh_banner_received=true
+ssh_banner=SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.18
