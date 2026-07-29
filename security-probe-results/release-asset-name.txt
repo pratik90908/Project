@@ -1,0 +1,76 @@
+run_id=30433922301
+tag=security-probe-30433922301
+release_create=success
+asset_id=493776280
+variant_1_requested=../escape.txt
+variant_1_patch=success
+variant_1_returned=default.escape.txt
+variant_1_download=success
+variant_1_tree_begin
+d /home/runner/work/_temp/release-probe/download
+d /home/runner/work/_temp/release-probe/download/child
+f /home/runner/work/_temp/release-probe/download/child/default.escape.txt
+variant_1_tree_end
+variant_2_requested=..\\escape.txt
+variant_2_patch=success
+variant_2_returned=default.escape.txt
+variant_2_download=success
+variant_2_tree_begin
+d /home/runner/work/_temp/release-probe/download
+d /home/runner/work/_temp/release-probe/download/child
+f /home/runner/work/_temp/release-probe/download/child/default.escape.txt
+variant_2_tree_end
+variant_3_requested=dir/../escape.txt
+variant_3_patch=success
+variant_3_returned=dir.escape.txt
+variant_3_download=success
+variant_3_tree_begin
+d /home/runner/work/_temp/release-probe/download
+d /home/runner/work/_temp/release-probe/download/child
+f /home/runner/work/_temp/release-probe/download/child/dir.escape.txt
+variant_3_tree_end
+variant_4_requested=dir\\..\\escape.txt
+variant_4_patch=success
+variant_4_returned=dir.escape.txt
+variant_4_download=success
+variant_4_tree_begin
+d /home/runner/work/_temp/release-probe/download
+d /home/runner/work/_temp/release-probe/download/child
+f /home/runner/work/_temp/release-probe/download/child/dir.escape.txt
+variant_4_tree_end
+variant_5_requested=%2e%2e%2fescape.txt
+variant_5_patch=success
+variant_5_returned=2e.2e.2fescape.txt
+variant_5_download=success
+variant_5_tree_begin
+d /home/runner/work/_temp/release-probe/download
+d /home/runner/work/_temp/release-probe/download/child
+f /home/runner/work/_temp/release-probe/download/child/2e.2e.2fescape.txt
+variant_5_tree_end
+variant_6_requested=%2e%2e%5cescape.txt
+variant_6_patch=success
+variant_6_returned=2e.2e.5cescape.txt
+variant_6_download=success
+variant_6_tree_begin
+d /home/runner/work/_temp/release-probe/download
+d /home/runner/work/_temp/release-probe/download/child
+f /home/runner/work/_temp/release-probe/download/child/2e.2e.5cescape.txt
+variant_6_tree_end
+variant_7_requested=.\\.\\escape.txt
+variant_7_patch=success
+variant_7_returned=default.escape.txt
+variant_7_download=success
+variant_7_tree_begin
+d /home/runner/work/_temp/release-probe/download
+d /home/runner/work/_temp/release-probe/download/child
+f /home/runner/work/_temp/release-probe/download/child/default.escape.txt
+variant_7_tree_end
+variant_8_requested=.../escape.txt
+variant_8_patch=success
+variant_8_returned=default.escape.txt
+variant_8_download=success
+variant_8_tree_begin
+d /home/runner/work/_temp/release-probe/download
+d /home/runner/work/_temp/release-probe/download/child
+f /home/runner/work/_temp/release-probe/download/child/default.escape.txt
+variant_8_tree_end
