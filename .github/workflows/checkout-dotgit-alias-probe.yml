@@ -14,20 +14,20 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch current checkout action source
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - name: Fetch released checkout v7 bundle
+        uses: actions/checkout@v7
         with:
           repository: actions/checkout
-          ref: f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+          ref: v7
           path: checkout-action-src
           persist-credentials: false
 
       - name: Checkout lab repository for verdict commit
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        uses: actions/checkout@v7
         with:
           path: verdict-repo
 
-      - name: Differential alias and execution validation
+      - name: Differential v7 alias and execution validation
         shell: bash
         env:
           TOKEN: ${{ github.token }}
@@ -36,7 +36,7 @@ jobs:
         run: |
           set -u
           SRC="$GITHUB_WORKSPACE/checkout-action-src"
-          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/checkout-dotgit-alias-chain.txt"
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/checkout-dotgit-v7-chain.txt"
           mkdir -p "$(dirname "$RESULT")"
           : > "$RESULT"
 
@@ -137,6 +137,6 @@ jobs:
           cd verdict-repo
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add security-probe-results/checkout-dotgit-alias-chain.txt
-          git commit -m 'Record checkout dotgit alias privileged execution chain' || exit 0
+          git add security-probe-results/checkout-dotgit-v7-chain.txt
+          git commit -m 'Record released v7 checkout dotgit privileged chain' || exit 0
           git push
