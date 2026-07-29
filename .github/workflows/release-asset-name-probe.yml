@@ -1,0 +1,94 @@
+name: release-asset-name-probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-asset-name-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe release asset rename validation
+        shell: bash
+        run: |
+          set -u
+          mkdir -p security-probe-results "$RUNNER_TEMP/release-probe"
+          RESULT=security-probe-results/release-asset-name.txt
+          : > "$RESULT"
+          TAG="security-probe-$GITHUB_RUN_ID"
+          echo "run_id=$GITHUB_RUN_ID" >> "$RESULT"
+          echo "tag=$TAG" >> "$RESULT"
+          printf 'harmless marker\n' > "$RUNNER_TEMP/release-probe/safe.txt"
+
+          if ! gh release create "$TAG" "$RUNNER_TEMP/release-probe/safe.txt#probe" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --notes 'security probe' >/tmp/release-create.out 2>/tmp/release-create.err; then
+            echo "release_create=failure" >> "$RESULT"
+            cat /tmp/release-create.err >> "$RESULT"
+          else
+            echo "release_create=success" >> "$RESULT"
+            ASSET_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.assets[0].id')
+            echo "asset_id=$ASSET_ID" >> "$RESULT"
+
+            variants=(
+              '../escape.txt'
+              '..\\escape.txt'
+              'dir/../escape.txt'
+              'dir\\..\\escape.txt'
+              '%2e%2e%2fescape.txt'
+              '%2e%2e%5cescape.txt'
+              '.\\.\\escape.txt'
+              '.../escape.txt'
+            )
+
+            i=0
+            for name in "${variants[@]}"; do
+              i=$((i+1))
+              echo "variant_${i}_requested=$name" >> "$RESULT"
+              body=$(mktemp)
+              err=$(mktemp)
+              if gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" -f "name=$name" >"$body" 2>"$err"; then
+                returned=$(jq -r '.name // "<null>"' < "$body")
+                echo "variant_${i}_patch=success" >> "$RESULT"
+                echo "variant_${i}_returned=$returned" >> "$RESULT"
+                rm -rf "$RUNNER_TEMP/release-probe/download"
+                mkdir -p "$RUNNER_TEMP/release-probe/download/child"
+                if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release-probe/download/child" --clobber >/tmp/dl.out 2>/tmp/dl.err; then
+                  echo "variant_${i}_download=success" >> "$RESULT"
+                else
+                  echo "variant_${i}_download=failure" >> "$RESULT"
+                  tr '\n' ' ' < /tmp/dl.err | sed 's/^/variant_'"$i"'_download_error=/' >> "$RESULT"
+                  echo >> "$RESULT"
+                fi
+                echo "variant_${i}_tree_begin" >> "$RESULT"
+                find "$RUNNER_TEMP/release-probe/download" -maxdepth 5 -printf '%y %p\n' 2>/dev/null >> "$RESULT" || true
+                echo "variant_${i}_tree_end" >> "$RESULT"
+              else
+                echo "variant_${i}_patch=failure" >> "$RESULT"
+                tr '\n' ' ' < "$err" | sed 's/^/variant_'"$i"'_patch_error=/' >> "$RESULT"
+                echo >> "$RESULT"
+              fi
+              rm -f "$body" "$err"
+            done
+
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag >/dev/null 2>&1 || true
+          fi
+
+      - name: Commit probe verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/release-asset-name.txt
+          git commit -m 'Record release asset rename probe verdict' || exit 0
+          git push
