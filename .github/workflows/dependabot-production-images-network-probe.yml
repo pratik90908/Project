@@ -1,0 +1,127 @@
+name: dependabot-production-images-network-probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dependabot-production-images-network-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v7
+        with:
+          path: verdict-repo
+
+      - name: Validate with exact Dependabot production images
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROXY_IMAGE='ghcr.io/dependabot/proxy:v2.0.20260616220547@sha256:b3c9cac5831fdef22330282f54c7067d4df9844385daf8f1a66c880a670a9daa'
+          UPDATER_IMAGE='ghcr.io/dependabot/dependabot-updater-npm:v2.0.20260618134322@sha256:202d8cf76d983932160073ccbecc20d548b3ecba73d2f63547d1873a1166f8ce'
+
+          mkdir -p host-sentinel
+          printf 'DEPENDABOT_PRODUCTION_IMAGE_SENTINEL_622a\n' > host-sentinel/sentinel.txt
+          nohup python3 -m http.server 18082 --bind 0.0.0.0 --directory host-sentinel > "$RUNNER_TEMP/prod-image-http.log" 2>&1 &
+          sleep 1
+
+          docker pull "$PROXY_IMAGE" >/dev/null
+          docker pull "$UPDATER_IMAGE" >/dev/null
+
+          docker network create db-prod-external >/dev/null
+          docker network create --internal db-prod-internal >/dev/null
+
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$RUNNER_TEMP/prod-ca.key" -out "$RUNNER_TEMP/prod-ca.crt" \
+            -subj '/CN=Dependabot Production Image PoC CA' -days 1 >/dev/null 2>&1
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          cfg = {
+            'all_credentials': [],
+            'ca': {
+              'cert': Path(os.environ['RUNNER_TEMP'] + '/prod-ca.crt').read_text(),
+              'key': Path(os.environ['RUNNER_TEMP'] + '/prod-ca.key').read_text(),
+            },
+            'proxy_auth': {'username': '', 'password': ''},
+          }
+          Path(os.environ['RUNNER_TEMP'] + '/prod-proxy-config.json').write_text(json.dumps(cfg))
+          PY
+
+          docker run -d --name db-prod-proxy \
+            --network db-prod-internal \
+            -v "$RUNNER_TEMP/prod-proxy-config.json:/config.json:ro" \
+            "$PROXY_IMAGE" -config /config.json >/dev/null
+          docker network connect db-prod-external db-prod-proxy
+
+          PROXY_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "db-prod-internal").IPAddress}}' db-prod-proxy)
+          INTERNAL_GATEWAY=$(docker network inspect db-prod-internal -f '{{(index .IPAM.Config 0).Gateway}}')
+          EXTERNAL_GATEWAY=$(docker network inspect db-prod-external -f '{{(index .IPAM.Config 0).Gateway}}')
+
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/dependabot-production-images-network.txt"
+          mkdir -p "$(dirname "$RESULT")"
+          : > "$RESULT"
+          echo "proxy_image=$PROXY_IMAGE" >> "$RESULT"
+          echo "updater_image=$UPDATER_IMAGE" >> "$RESULT"
+          echo 'updater_user=dependabot' >> "$RESULT"
+          echo 'updater_network_internal=true' >> "$RESULT"
+          echo 'proxy_dual_homed=true' >> "$RESULT"
+
+          run_updater_fetch() {
+            local url="$1"
+            local proxy_url="${2:-}"
+            docker run --rm --user dependabot --network db-prod-internal \
+              -e TARGET_URL="$url" -e PROXY_URL="$proxy_url" \
+              --entrypoint /bin/sh "$UPDATER_IMAGE" -lc '
+                if command -v curl >/dev/null 2>&1; then
+                  if [ -n "$PROXY_URL" ]; then exec curl -fsS --max-time 8 --proxy "$PROXY_URL" "$TARGET_URL"; else exec curl -fsS --max-time 8 "$TARGET_URL"; fi
+                elif command -v ruby >/dev/null 2>&1; then
+                  if [ -n "$PROXY_URL" ]; then
+                    export http_proxy="$PROXY_URL" HTTP_PROXY="$PROXY_URL"
+                  fi
+                  exec ruby -rnet/http -ruri -e "u=URI(ENV.fetch(\"TARGET_URL\")); print Net::HTTP.get(u)"
+                else
+                  exit 127
+                fi
+              '
+          }
+
+          set +e
+          DIRECT_BODY=$(run_updater_fetch "http://${INTERNAL_GATEWAY}:18082/sentinel.txt" 2>/dev/null)
+          DIRECT_EC=$?
+          PROXY_BODY=$(run_updater_fetch "http://${EXTERNAL_GATEWAY}:18082/sentinel.txt" "http://${PROXY_IP}:1080" 2>/dev/null)
+          PROXY_EC=$?
+          set -e
+
+          echo "production_updater_direct_internal_gateway_exit=$DIRECT_EC" >> "$RESULT"
+          if [[ "$DIRECT_BODY" == 'DEPENDABOT_PRODUCTION_IMAGE_SENTINEL_622a' ]]; then
+            echo 'production_updater_direct_internal_gateway_reached_host=true' >> "$RESULT"
+          else
+            echo 'production_updater_direct_internal_gateway_reached_host=false' >> "$RESULT"
+          fi
+
+          echo "production_updater_proxy_external_gateway_exit=$PROXY_EC" >> "$RESULT"
+          if [[ "$PROXY_BODY" == 'DEPENDABOT_PRODUCTION_IMAGE_SENTINEL_622a' ]]; then
+            echo 'production_updater_proxy_external_gateway_reached_host=true' >> "$RESULT"
+          else
+            echo 'production_updater_proxy_external_gateway_reached_host=false' >> "$RESULT"
+          fi
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verdict-repo
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/dependabot-production-images-network.txt
+          git commit -m 'Record Dependabot production image network escape probe' || exit 0
+          git push
