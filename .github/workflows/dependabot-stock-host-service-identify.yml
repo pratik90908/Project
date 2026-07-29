@@ -1,0 +1,78 @@
+name: dependabot-stock-host-service-identify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dependabot-stock-host-service-identify.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v7
+        with:
+          path: verdict-repo
+
+      - name: Identify stock wildcard TCP listener
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/dependabot-stock-host-service.txt"
+          mkdir -p "$(dirname "$RESULT")"
+          : > "$RESULT"
+
+          sudo ss -ltnpH > "$RUNNER_TEMP/stock-listeners.txt"
+          python3 - <<'PY' > "$RUNNER_TEMP/stock-service-summary.txt"
+          import re
+          from pathlib import Path
+          lines=Path(__import__('os').environ['RUNNER_TEMP']+'/stock-listeners.txt').read_text().splitlines()
+          found=[]
+          for line in lines:
+              parts=line.split()
+              if len(parts)<4: continue
+              local=parts[3]
+              host, sep, port=local.rpartition(':')
+              host=host.strip('[]')
+              if port.isdigit() and host in ('0.0.0.0','*','::'):
+                  m=re.search(r'users:\(\("([^\"]+)"', line)
+                  proc=m.group(1) if m else 'unknown'
+                  found.append((int(port),proc))
+          print('preexisting_nonloopback_listener_count='+str(len(found)))
+          for i,(port,proc) in enumerate(sorted(found)[:5],1):
+              print(f'listener_{i}_port={port}')
+              print(f'listener_{i}_process={proc}')
+          PY
+          cat "$RUNNER_TEMP/stock-service-summary.txt" >> "$RESULT"
+
+          docker network create --internal db-identify-internal >/dev/null
+          GW=$(docker network inspect db-identify-internal -f '{{(index .IPAM.Config 0).Gateway}}')
+          PORT=$(awk -F= '/listener_1_port=/{print $2; exit}' "$RESULT")
+
+          if [[ -n "$PORT" ]]; then
+            set +e
+            docker run --rm --network db-identify-internal python:3.13-alpine \
+              python -c 'import socket,sys; s=socket.socket(); s.settimeout(2); s.connect((sys.argv[1],int(sys.argv[2]))); s.close()' \
+              "$GW" "$PORT" >/dev/null 2>&1
+            EC=$?
+            set -e
+            echo "listener_1_tcp_connect_from_internal_exit=$EC" >> "$RESULT"
+            if [[ $EC -eq 0 ]]; then echo 'listener_1_reachable=true' >> "$RESULT"; else echo 'listener_1_reachable=false' >> "$RESULT"; fi
+          fi
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verdict-repo
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/dependabot-stock-host-service.txt
+          git commit -m 'Record reachable stock runner host service identity' || exit 0
+          git push
