@@ -1,0 +1,117 @@
+name: dependabot-internal-gateway-probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dependabot-internal-gateway-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v7
+        with:
+          path: verdict-repo
+
+      - name: Checkout exact Dependabot proxy source
+        uses: actions/checkout@v7
+        with:
+          repository: dependabot/proxy
+          ref: cf74f6f9338ce8eb899ce8e472eaed6a19238a5b
+          path: proxy-src
+          persist-credentials: false
+
+      - name: Test host reachability across production-style networks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          mkdir -p host-sentinel
+          printf 'DEPENDABOT_HOST_GATEWAY_SENTINEL_9b31\n' > host-sentinel/sentinel.txt
+          nohup python3 -m http.server 18081 --bind 0.0.0.0 --directory host-sentinel > "$RUNNER_TEMP/host-gateway-http.log" 2>&1 &
+          sleep 1
+
+          docker build -t db-proxy-gateway-poc:current proxy-src
+          docker network create db-gateway-external >/dev/null
+          docker network create --internal db-gateway-internal >/dev/null
+
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$RUNNER_TEMP/gw-ca.key" -out "$RUNNER_TEMP/gw-ca.crt" \
+            -subj '/CN=Dependabot Gateway PoC CA' -days 1 >/dev/null 2>&1
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          cfg = {
+            'all_credentials': [],
+            'ca': {
+              'cert': Path(os.environ['RUNNER_TEMP'] + '/gw-ca.crt').read_text(),
+              'key': Path(os.environ['RUNNER_TEMP'] + '/gw-ca.key').read_text(),
+            },
+            'proxy_auth': {'username': '', 'password': ''},
+          }
+          Path(os.environ['RUNNER_TEMP'] + '/gw-proxy-config.json').write_text(json.dumps(cfg))
+          PY
+
+          docker run -d --name db-gateway-proxy \
+            --network db-gateway-internal \
+            -v "$RUNNER_TEMP/gw-proxy-config.json:/config.json:ro" \
+            db-proxy-gateway-poc:current -config /config.json >/dev/null
+          docker network connect db-gateway-external db-gateway-proxy
+
+          PROXY_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "db-gateway-internal").IPAddress}}' db-gateway-proxy)
+          INTERNAL_GATEWAY=$(docker network inspect db-gateway-internal -f '{{(index .IPAM.Config 0).Gateway}}')
+          EXTERNAL_GATEWAY=$(docker network inspect db-gateway-external -f '{{(index .IPAM.Config 0).Gateway}}')
+
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/dependabot-internal-gateway.txt"
+          mkdir -p "$(dirname "$RESULT")"
+          : > "$RESULT"
+          echo 'source_revision=cf74f6f9338ce8eb899ce8e472eaed6a19238a5b' >> "$RESULT"
+          echo 'updater_network_internal=true' >> "$RESULT"
+          echo 'proxy_dual_homed=true' >> "$RESULT"
+
+          probe() {
+            local label="$1"; shift
+            set +e
+            local body
+            body=$("$@" 2>/dev/null)
+            local ec=$?
+            set -e
+            echo "${label}_exit=${ec}" >> "$RESULT"
+            if [[ "$body" == 'DEPENDABOT_HOST_GATEWAY_SENTINEL_9b31' ]]; then
+              echo "${label}_reached_host=true" >> "$RESULT"
+            else
+              echo "${label}_reached_host=false" >> "$RESULT"
+            fi
+          }
+
+          probe direct_internal_gateway \
+            docker run --rm --network db-gateway-internal curlimages/curl:8.16.0 \
+              --silent --show-error --max-time 5 "http://${INTERNAL_GATEWAY}:18081/sentinel.txt"
+
+          probe direct_external_gateway \
+            docker run --rm --network db-gateway-internal curlimages/curl:8.16.0 \
+              --silent --show-error --max-time 5 "http://${EXTERNAL_GATEWAY}:18081/sentinel.txt"
+
+          probe proxy_external_gateway \
+            docker run --rm --network db-gateway-internal curlimages/curl:8.16.0 \
+              --silent --show-error --max-time 5 --proxy "http://${PROXY_IP}:1080" \
+              "http://${EXTERNAL_GATEWAY}:18081/sentinel.txt"
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verdict-repo
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/dependabot-internal-gateway.txt
+          git commit -m 'Record Dependabot internal gateway isolation probe' || exit 0
+          git push
