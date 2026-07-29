@@ -1,0 +1,118 @@
+name: checkout-dotgit-alias-probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/checkout-dotgit-alias-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch current checkout action source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          repository: actions/checkout
+          ref: f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+          path: checkout-action-src
+          persist-credentials: false
+
+      - name: Checkout lab repository for verdict commit
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          path: verdict-repo
+
+      - name: Run compiled action under synthetic fork PR event
+        id: synthetic
+        shell: bash
+        env:
+          TOKEN: ${{ github.token }}
+          PAYLOAD_SHA: 9624afebfb3dd33f50badbbd8f11750439b0a989
+        run: |
+          set -u
+          SRC="$GITHUB_WORKSPACE/checkout-action-src"
+          SYNTH="$GITHUB_WORKSPACE/synthetic-workspace"
+          EVENT="$RUNNER_TEMP/synthetic-pull-request-target.json"
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/checkout-dotgit-alias.txt"
+          rm -rf "$SYNTH"
+          mkdir -p "$SYNTH" "$(dirname "$RESULT")"
+
+          cat > "$EVENT" <<EOF
+          {
+            "repository": {
+              "id": 424242424,
+              "full_name": "pratik90908/synthetic-base"
+            },
+            "pull_request": {
+              "head": {
+                "repo": {
+                  "id": 900807132,
+                  "full_name": "pratik90908/Project"
+                },
+                "sha": "$PAYLOAD_SHA"
+              },
+              "merge_commit_sha": "1111111111111111111111111111111111111111"
+            }
+          }
+          EOF
+
+          set +e
+          env \
+            GITHUB_EVENT_NAME=pull_request_target \
+            GITHUB_EVENT_PATH="$EVENT" \
+            GITHUB_REPOSITORY=pratik90908/synthetic-base \
+            GITHUB_WORKSPACE="$SYNTH" \
+            INPUT_REPOSITORY=pratik90908/Project.git \
+            INPUT_REF=checkout-dotgit-payload \
+            INPUT_TOKEN="$TOKEN" \
+            node "$SRC/dist/index.js" > "$RUNNER_TEMP/dotgit-action.log" 2>&1
+          ACTION_EXIT=$?
+          set -e
+
+          : > "$RESULT"
+          echo "action_exit=$ACTION_EXIT" >> "$RESULT"
+          echo "event=pull_request_target" >> "$RESULT"
+          echo "payload_head_repo=pratik90908/Project" >> "$RESULT"
+          echo "input_repository=pratik90908/Project.git" >> "$RESULT"
+          echo "input_ref=checkout-dotgit-payload" >> "$RESULT"
+
+          if [[ -f "$SYNTH/checkout-dotgit-marker.txt" ]] && grep -q 'CHECKOUT_DOTGIT_ALIAS_MARKER' "$SYNTH/checkout-dotgit-marker.txt"; then
+            echo 'marker_checked_out=true' >> "$RESULT"
+          else
+            echo 'marker_checked_out=false' >> "$RESULT"
+          fi
+
+          if git -C "$SYNTH" rev-parse HEAD >/dev/null 2>&1; then
+            echo "checked_out_head=$(git -C "$SYNTH" rev-parse HEAD)" >> "$RESULT"
+            echo "origin=$(git -C "$SYNTH" remote get-url origin 2>/dev/null || true)" >> "$RESULT"
+          else
+            echo 'checked_out_head=' >> "$RESULT"
+            echo 'origin=' >> "$RESULT"
+          fi
+
+          if grep -q 'Refusing to check out fork pull request code' "$RUNNER_TEMP/dotgit-action.log"; then
+            echo 'guard_refused=true' >> "$RESULT"
+          else
+            echo 'guard_refused=false' >> "$RESULT"
+          fi
+
+          echo 'log_tail_begin' >> "$RESULT"
+          tail -n 20 "$RUNNER_TEMP/dotgit-action.log" | sed -E 's/(token|password|authorization)[^ ]*/[redacted]/Ig' >> "$RESULT" || true
+          echo 'log_tail_end' >> "$RESULT"
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verdict-repo
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/checkout-dotgit-alias.txt
+          git commit -m 'Record checkout dotgit alias bypass probe' || exit 0
+          git push
