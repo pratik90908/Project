@@ -1,0 +1,61 @@
+name: cache-reusable-caller
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  call-reusable:
+    uses: ./.github/workflows/cache-reusable-callee.yml
+
+  verify-cache:
+    needs: call-reusable
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted base branch for verdict only
+        uses: actions/checkout@v7
+
+      - name: Attempt exact restore
+        id: restore
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/reusable-cache-restore
+          key: reusable-launder-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Record verdict
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          mkdir -p security-probe-results
+          RESULT=security-probe-results/cache-reusable-launder.txt
+          : > "$RESULT"
+          echo "run_id=$GITHUB_RUN_ID" >> "$RESULT"
+          echo "event=$GITHUB_EVENT_NAME" >> "$RESULT"
+          echo "cache_hit=${CACHE_HIT:-}" >> "$RESULT"
+          if [[ "${CACHE_HIT:-}" == "true" ]]; then
+            echo 'cache_created=true' >> "$RESULT"
+          else
+            echo 'cache_created=false' >> "$RESULT"
+          fi
+          if [[ -f "$RUNNER_TEMP/reusable-cache-restore/marker.txt" ]]; then
+            echo 'marker_restored=true' >> "$RESULT"
+          else
+            echo 'marker_restored=false' >> "$RESULT"
+          fi
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/cache-reusable-launder.txt
+          git commit -m 'Record reusable cache trust probe verdict' || exit 0
+          git push
