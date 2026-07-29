@@ -1,0 +1,21 @@
+name: cache-reusable-callee
+
+on:
+  workflow_call:
+
+jobs:
+  save-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare harmless cache payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/reusable-cache-payload"
+          printf 'REUSABLE_CACHE_%s_%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/reusable-cache-payload/marker.txt"
+
+      - name: Attempt cache save from reusable workflow
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/reusable-cache-payload
+          key: reusable-launder-${{ github.run_id }}-${{ github.run_attempt }}
