@@ -1,0 +1,5 @@
+network_internal=true
+preexisting_nonloopback_listener_count=1
+preexisting_ports_tested=1
+preexisting_ports_reachable_from_internal_container=1
+stock_runner_private_service_reachability=true
