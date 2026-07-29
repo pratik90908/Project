@@ -1,0 +1,61 @@
+name: artifact-dotdot-runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/artifact-dotdot-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare harmless payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/payload-dotdot" "$RUNNER_TEMP/payload-dummy"
+          printf 'DOTDOT_ESCAPE_%s\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/payload-dotdot/escape-marker.txt"
+          printf 'dummy\n' > "$RUNNER_TEMP/payload-dummy/dummy.txt"
+
+      - name: Upload artifact named dot-dot
+        uses: actions/upload-artifact@v4
+        with:
+          name: '..'
+          path: ${{ runner.temp }}/payload-dotdot/escape-marker.txt
+
+      - name: Upload second artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dummy-artifact
+          path: ${{ runner.temp }}/payload-dummy/dummy.txt
+
+      - name: Prepare nested download destination
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/artifact-root/child"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: ${{ runner.temp }}/artifact-root/child
+
+      - name: Validate destination-root escape
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '--- expected child tree ---'
+          find "$RUNNER_TEMP/artifact-root/child" -maxdepth 3 -type f -print || true
+          echo '--- parent tree ---'
+          find "$RUNNER_TEMP/artifact-root" -maxdepth 3 -type f -print || true
+          if [[ -f "$RUNNER_TEMP/artifact-root/escape-marker.txt" ]]; then
+            echo 'VULNERABLE: artifact name .. escaped the configured download directory'
+            cat "$RUNNER_TEMP/artifact-root/escape-marker.txt"
+            exit 0
+          fi
+          echo 'NOT VULNERABLE: marker did not escape into parent directory'
+          exit 1
