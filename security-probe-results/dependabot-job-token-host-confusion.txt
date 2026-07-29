@@ -1,0 +1,4 @@
+source_revision=cf74f6f9338ce8eb899ce8e472eaed6a19238a5b
+token_injected=true
+actual_destination_preserved=true
+trusted_host_spoof_accepted=true
