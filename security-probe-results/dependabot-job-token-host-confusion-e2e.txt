@@ -1,0 +1,3 @@
+source_revision=cf74f6f9338ce8eb899ce8e472eaed6a19238a5b
+fake_job_token_received_by_attacker=true
+connect_destination_remained_attacker=true
