@@ -1,0 +1,32 @@
+name: background-command-isolation-probe
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Background command jammer
+        id: jammer
+        background: true
+        shell: bash
+        run: |
+          echo '::stop-commands::BG_ISOLATION_RESUME_7f0b93'
+          sleep 8
+          echo '::BG_ISOLATION_RESUME_7f0b93::'
+
+      - name: Foreground dynamic masking control
+        shell: bash
+        run: |
+          sleep 2
+          sentinel='DYNAMIC_FAKE_SECRET_7f0b93c1'
+          echo "::add-mask::$sentinel"
+          echo "MASK_PROBE_VALUE=$sentinel"
+
+      - name: Final marker
+        run: echo 'BACKGROUND_COMMAND_ISOLATION_PROBE_DONE'
