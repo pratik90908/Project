@@ -15,24 +15,47 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Reproduce Desktop Cygwin shell construction safely
-        shell: pwsh
+        id: reproduce
+        continue-on-error: true
+        shell: bash
+        env:
+          PAYLOAD: 'evil$(touch${IFS}marker)'
         run: |
-          $ErrorActionPreference = 'Stop'
-          $repoName = "Project-evil`$(touch`$IFS'marker')"
-          $root = Join-Path $env:RUNNER_TEMP 'desktop-cygwin-probe'
-          $repoPath = Join-Path $root $repoName
-          New-Item -ItemType Directory -Force -Path $repoPath | Out-Null
-          $marker = Join-Path $repoPath 'marker'
-          $bash = (Get-Command bash.exe).Source
-          $unixish = $repoPath -replace '\\','/'
-          $script = "cygpath(){ printf '%s\\n' \"`$1\"; }; cd \"`$(cygpath \"$unixish\")\"; true"
-          & $bash -lc $script
-          $created = Test-Path $marker
-          New-Item -ItemType Directory -Force security-probe-results | Out-Null
-          "marker_created=$($created.ToString().ToLower())" | Set-Content security-probe-results/desktop-cygwin-path.txt
-          "payload_branch=evil`$(touch`$IFS'marker')" | Add-Content security-probe-results/desktop-cygwin-path.txt
+          set -u
+          root="${RUNNER_TEMP}/desktop-cygwin-probe"
+          repo_path="${root}/Project-${PAYLOAD}"
+          rm -rf "$root"
+          mkdir -p "$repo_path"
+          marker="$repo_path/marker"
+
+          # Desktop Cygwin launcher constructs shell source by interpolating the
+          # repository path into: cd "$(cygpath "<path>")"; exec bash
+          # Build equivalent source text, then parse it in a fresh bash process.
+          script=$(printf 'cd "$(cygpath "%s")"; true' "$repo_path")
+          bash -lc "$script" || true
+
+          mkdir -p security-probe-results
+          if [[ -e "$marker" ]]; then
+            echo 'marker_created=true' > security-probe-results/desktop-cygwin-path.txt
+          else
+            echo 'marker_created=false' > security-probe-results/desktop-cygwin-path.txt
+          fi
+          printf 'payload_branch=%s\n' "$PAYLOAD" >> security-probe-results/desktop-cygwin-path.txt
+          printf 'generated_script=%s\n' "$script" >> security-probe-results/desktop-cygwin-path.txt
+
+      - name: Ensure verdict exists
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p security-probe-results
+          if [[ ! -f security-probe-results/desktop-cygwin-path.txt ]]; then
+            echo 'marker_created=probe_step_failed' > security-probe-results/desktop-cygwin-path.txt
+          fi
+
       - name: Commit verdict
+        if: always()
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
