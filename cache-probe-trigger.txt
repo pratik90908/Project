@@ -1,0 +1,2 @@
+trigger reusable cache trust probe
+trigger cache read-only downgrade probe 2026-07-29
